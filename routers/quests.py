@@ -1,6 +1,7 @@
 import aiomysql
 from fastapi import APIRouter, Depends
 
+from auth import require_server_key
 from db import get_db
 
 router = APIRouter(prefix="/quests", tags=["quests"])
@@ -41,7 +42,7 @@ async def get_quest(quest_id: str, conn=Depends(get_db)):
     return quest
 
 
-@router.post("/{quest_id}/complete")
+@router.post("/{quest_id}/complete", dependencies=[Depends(require_server_key)])
 async def complete_quest(quest_id: str, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
         await cur.execute("SELECT * FROM quests WHERE id = %s", (quest_id,))
@@ -59,7 +60,7 @@ async def complete_quest(quest_id: str, conn=Depends(get_db)):
     return {"status": "ok", "quest_id": quest_id}
 
 
-@router.post("/{quest_id}/complete/{ime}")
+@router.post("/{quest_id}/complete/{ime}", dependencies=[Depends(require_server_key)])
 async def complete_quest_for_player(quest_id: str, ime: str, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
         await cur.execute("SELECT id FROM quests WHERE id = %s", (quest_id,))
