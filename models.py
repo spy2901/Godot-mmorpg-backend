@@ -2,16 +2,9 @@ from pydantic import BaseModel
 
 
 class PlayerSave(BaseModel):
-    # gold, aktivni_quest_id i quest_progres namerno nisu ovde:
-    # server ih ne prima od klijenta (Pydantic ignorise visak polja).
-    level: int = 1
-    xp: int = 0
-    max_xp: int = 100
+    # level, xp, max_*, napad_damage, gold, quest -> racuna iskljucivo server
     hp: int = 100
-    max_hp: int = 100
     mana: int = 100
-    max_mana: int = 100
-    napad_damage: int = 250
     pos_x: float = 0.0
     pos_y: float = 0.0
     pos_z: float = 0.0
@@ -25,6 +18,10 @@ class InventoryChange(BaseModel):
 
 class GoldChange(BaseModel):
     delta: int  # + dodaje, - oduzima
+    razlog: str = ""
+
+class XpChange(BaseModel):
+    delta: int
     razlog: str = ""
 
 class ShopBuy(BaseModel):

@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from auth import require_server_key
 from db import get_db
 from models import (GoldChange, InventoryChange, PlayerSave, QuestAccept,
-                    QuestKill, QuestTurnin, ShopBuy)
+                    QuestKill, QuestTurnin, ShopBuy, XpChange)
 from routers.inventory_utils import (MAX_SLOTOVA, dodaj_u_inventar,
                                      ukloni_iz_inventara)
 
@@ -48,6 +48,55 @@ async def _je_zavrsen(cur, ime: str, quest_id: str) -> bool:
     return await cur.fetchone() is not None
 
 
+XP_KOLONE = "level, xp, max_xp, max_hp, max_mana, napad_damage"
+
+
+def _primeni_xp(row: dict, delta: int) -> dict:
+    s = {k: int(row[k] or 0) for k in XP_KOLONE.split(", ")}
+    s["max_xp"] = max(s["max_xp"], 1)  # max_xp 0 bi dao beskonacnu petlju
+    s["xp"] += max(delta, 0)
+    s["level_up"] = False
+    while s["xp"] >= s["max_xp"]:
+        s["xp"] -= s["max_xp"]
+        s["level"] += 1
+        # celobrojno, jer npr. int(100 * 1.15) == 114 zbog float greske
+        s["max_xp"] = s["max_xp"] * 3 // 2
+        s["max_hp"] = s["max_hp"] * 115 // 100
+        s["max_mana"] = s["max_mana"] * 11 // 10
+        s["napad_damage"] = s["napad_damage"] * 11 // 10
+        s["level_up"] = True
+    return s
+
+
+async def _upisi_xp(cur, ime: str, s: dict):
+    kolone = XP_KOLONE.split(", ")
+    vrednosti = [s[k] for k in kolone]
+    if s["level_up"]:  # level up puni hp i manu na NOVE maksimume
+        kolone += ["hp", "mana"]
+        vrednosti += [s["max_hp"], s["max_mana"]]
+    postavi = ", ".join(f"{k} = %s" for k in kolone)
+    await cur.execute(f"UPDATE players SET {postavi} WHERE ime = %s", (*vrednosti, ime))
+
+
+async def _validna_oprema(cur, eq: dict) -> bool:
+    ids = {v for v in eq.values() if not _prazno(v)}
+    if not ids:
+        return True
+    await cur.execute(
+        f"SELECT id, tip FROM items WHERE id IN ({', '.join(['%s'] * len(ids))})",
+        tuple(ids),
+    )
+    tipovi = {r["id"]: r["tip"] for r in await cur.fetchall()}
+    for slot, item_id in eq.items():
+        if _prazno(item_id):
+            continue
+        if item_id not in tipovi:
+            return False
+        if tipovi[item_id] != ("weapon" if slot == "weapon" else "armor"):
+            return False
+    return True
+
+
 @router.get("/{ime}")
 async def get_player(ime: str, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -61,7 +110,7 @@ async def get_player(ime: str, conn=Depends(get_db)):
     return _decode_player(player)
 
 
-# ---------- save: klijent sme samo statove, poziciju i preraspored inventara ----------
+# ---------- save: klijent sme samo hp, manu, poziciju i preraspored inventara ----------
 
 def _je_int(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
@@ -102,30 +151,33 @@ def _validan_raspored(inv, eq, db_inv: list, db_eq: dict) -> bool:
 @router.post("/{ime}/save")
 async def save_player(ime: str, data: PlayerSave, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
-        row = await _zakljucaj_igraca(cur, ime, "inventory, equipment")
+        kolone = "inventory, equipment, max_hp, max_mana"
+        row = await _zakljucaj_igraca(cur, ime, kolone)
         if not row:
             # novi igrac: gold/inventory/equipment iz DEFAULT vrednosti tabele
             await cur.execute("INSERT IGNORE INTO players (ime) VALUES (%s)", (ime,))
-            row = await _zakljucaj_igraca(cur, ime, "inventory, equipment")
+            row = await _zakljucaj_igraca(cur, ime, kolone)
 
         db_inv = json.loads(row["inventory"] or "[]")
         db_eq = json.loads(row["equipment"] or "{}")
-        if _validan_raspored(data.inventory, data.equipment, db_inv, db_eq):
+        if (_validan_raspored(data.inventory, data.equipment, db_inv, db_eq)
+                and await _validna_oprema(cur, data.equipment)):
             inventory, equipment = json.dumps(data.inventory), json.dumps(data.equipment)
         else:
             log.warning("save %r: neispravan inventory/equipment, zadrzano stanje iz baze", ime)
             inventory, equipment = row["inventory"], row["equipment"]
 
+        hp = min(max(data.hp, 1), int(row["max_hp"]))
+        mana = min(max(data.mana, 0), int(row["max_mana"]))
+
         await cur.execute("""
             UPDATE players SET
-                level = %s, xp = %s, max_xp = %s, hp = %s, max_hp = %s,
-                mana = %s, max_mana = %s, napad_damage = %s,
+                hp = %s, mana = %s,
                 pos_x = %s, pos_y = %s, pos_z = %s,
                 inventory = %s, equipment = %s
             WHERE ime = %s
         """, (
-            data.level, data.xp, data.max_xp, data.hp, data.max_hp,
-            data.mana, data.max_mana, data.napad_damage,
+            hp, mana,
             data.pos_x, data.pos_y, data.pos_z,
             inventory, equipment, ime,
         ))
@@ -187,6 +239,23 @@ async def promeni_gold(ime: str, data: GoldChange, conn=Depends(get_db)):
         await conn.commit()
 
     return {"status": "ok", "gold": novo}
+
+
+@router.post("/{ime}/xp/change", dependencies=ZASTICENO)
+async def promeni_xp(ime: str, data: XpChange, conn=Depends(get_db)):
+    if data.delta <= 0:
+        return {"error": "delta mora biti > 0"}
+
+    async with conn.cursor(aiomysql.DictCursor) as cur:
+        row = await _zakljucaj_igraca(cur, ime, XP_KOLONE)
+        if not row:
+            return await _greska(conn, "Player not found")
+
+        s = _primeni_xp(row, data.delta)
+        await _upisi_xp(cur, ime, s)
+        await conn.commit()
+
+    return {"status": "ok", **s}
 
 
 @router.post("/{ime}/shop/buy", dependencies=ZASTICENO)
@@ -308,7 +377,9 @@ async def napusti_quest(ime: str, conn=Depends(get_db)):
 @router.post("/{ime}/quest/turnin", dependencies=ZASTICENO)
 async def predaj_quest(ime: str, data: QuestTurnin, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
-        row = await _zakljucaj_igraca(cur, ime, "gold, inventory, aktivni_quest_id, quest_progres")
+        row = await _zakljucaj_igraca(
+            cur, ime, f"gold, inventory, aktivni_quest_id, quest_progres, {XP_KOLONE}"
+        )
         if not row:
             return await _greska(conn, "Player not found")
         if _prazno(row["aktivni_quest_id"]) or row["aktivni_quest_id"] != data.quest_id:
@@ -359,6 +430,10 @@ async def predaj_quest(ime: str, data: QuestTurnin, conn=Depends(get_db)):
                 aktivni_quest_id = NULL, quest_progres = 0
             WHERE ime = %s
         """, (gold, json.dumps(inv), ime))
+
+        nagrada_xp = max(int(quest["nagrada_xp"] or 0), 0)
+        s = _primeni_xp(row, nagrada_xp)
+        await _upisi_xp(cur, ime, s)
         await conn.commit()
 
     sledeci = None if _prazno(quest["sledeci_quest"]) else quest["sledeci_quest"]
@@ -367,11 +442,12 @@ async def predaj_quest(ime: str, data: QuestTurnin, conn=Depends(get_db)):
         "nagrada": {
             "naziv": quest["naziv"],
             "gold": max(nagrada_gold, 0),
-            "xp": int(quest["nagrada_xp"] or 0),  # samo se vraca, ne cuva se ovde
+            "xp": int(quest["nagrada_xp"] or 0),
             "item": nagrada_item,
             "sledeci_quest": sledeci,
         },
         "quest": quest,
         "gold": gold,
         "inventory": inv,
+        "stats": s,
     }
