@@ -13,10 +13,13 @@ from models import (GoldChange, InventoryChange, PlayerSave, QuestAccept,
 from routers.inventory_utils import (MAX_SLOTOVA, dodaj_u_inventar,
                                      ukloni_iz_inventara)
 
-router = APIRouter(prefix="/players", tags=["players"])
+# Ceo ruter je samo za game server: sve rute traze X-Server-Key.
+router = APIRouter(
+    prefix="/players", tags=["players"],
+    dependencies=[Depends(require_server_key)],
+)
 log = logging.getLogger(__name__)
 
-ZASTICENO = [Depends(require_server_key)]
 SLOTOVI_OPREME = {"head", "chest", "legs", "boots", "weapon", "shield"}
 
 
@@ -181,9 +184,9 @@ async def save_player(ime: str, data: PlayerSave, conn=Depends(get_db)):
     return {"status": "ok"}
 
 
-# ---------- zasticene rute (samo game server sa X-Server-Key) ----------
+# ---------- izmene stanja igraca ----------
 
-@router.post("/{ime}/inventory/change", dependencies=ZASTICENO)
+@router.post("/{ime}/inventory/change")
 async def promeni_inventar(ime: str, data: InventoryChange, conn=Depends(get_db)):
     if data.delta == 0:
         return {"error": "delta ne sme biti 0"}
@@ -216,7 +219,7 @@ async def promeni_inventar(ime: str, data: InventoryChange, conn=Depends(get_db)
     return {"status": "ok", "inventory": inv}
 
 
-@router.post("/{ime}/gold/change", dependencies=ZASTICENO)
+@router.post("/{ime}/gold/change")
 async def promeni_gold(ime: str, data: GoldChange, conn=Depends(get_db)):
     if data.delta == 0:
         return {"error": "delta ne sme biti 0"}
@@ -237,7 +240,7 @@ async def promeni_gold(ime: str, data: GoldChange, conn=Depends(get_db)):
     return {"status": "ok", "gold": novo}
 
 
-@router.post("/{ime}/xp/change", dependencies=ZASTICENO)
+@router.post("/{ime}/xp/change")
 async def promeni_xp(ime: str, data: XpChange, conn=Depends(get_db)):
     if data.delta <= 0:
         return {"error": "delta mora biti > 0"}
@@ -254,7 +257,7 @@ async def promeni_xp(ime: str, data: XpChange, conn=Depends(get_db)):
     return {"status": "ok", **s}
 
 
-@router.post("/{ime}/shop/buy", dependencies=ZASTICENO)
+@router.post("/{ime}/shop/buy")
 async def kupi(ime: str, data: ShopBuy, conn=Depends(get_db)):
     if not 1 <= data.kolicina <= 99:
         return {"error": "kolicina mora biti 1..99"}
@@ -293,7 +296,7 @@ async def kupi(ime: str, data: ShopBuy, conn=Depends(get_db)):
     return {"status": "ok", "gold": novo, "inventory": inv}
 
 
-@router.post("/{ime}/quest/accept", dependencies=ZASTICENO)
+@router.post("/{ime}/quest/accept")
 async def prihvati_quest(ime: str, data: QuestAccept, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
         row = await _zakljucaj_igraca(cur, ime, "aktivni_quest_id")
@@ -328,7 +331,7 @@ async def prihvati_quest(ime: str, data: QuestAccept, conn=Depends(get_db)):
     return {"status": "ok", "quest": quest}
 
 
-@router.post("/{ime}/quest/kill", dependencies=ZASTICENO)
+@router.post("/{ime}/quest/kill")
 async def quest_kill(ime: str, data: QuestKill, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
         row = await _zakljucaj_igraca(cur, ime, "aktivni_quest_id, quest_progres")
@@ -357,7 +360,7 @@ async def quest_kill(ime: str, data: QuestKill, conn=Depends(get_db)):
     return {"status": "ok", "quest_progres": progres}
 
 
-@router.post("/{ime}/quest/abandon", dependencies=ZASTICENO)
+@router.post("/{ime}/quest/abandon")
 async def napusti_quest(ime: str, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
         if not await _zakljucaj_igraca(cur, ime, "ime"):
@@ -370,7 +373,7 @@ async def napusti_quest(ime: str, conn=Depends(get_db)):
     return {"status": "ok"}
 
 
-@router.post("/{ime}/quest/turnin", dependencies=ZASTICENO)
+@router.post("/{ime}/quest/turnin")
 async def predaj_quest(ime: str, data: QuestTurnin, conn=Depends(get_db)):
     async with conn.cursor(aiomysql.DictCursor) as cur:
         row = await _zakljucaj_igraca(
