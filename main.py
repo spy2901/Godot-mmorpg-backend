@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 
-from routers import items, players, quests
+
+from routers import accounts, items, players, quests
 
 app = FastAPI()
 
+app.include_router(accounts.router)
 app.include_router(items.router)
 app.include_router(quests.router)
 app.include_router(players.router)

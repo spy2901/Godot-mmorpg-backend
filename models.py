@@ -36,3 +36,14 @@ class QuestKill(BaseModel):
 
 class QuestTurnin(BaseModel):
     quest_id: str
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class VerifyRequest(BaseModel):
+    token: str

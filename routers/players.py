@@ -4,6 +4,7 @@ from collections import Counter
 
 import aiomysql
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 
 from auth import require_server_key
 from db import get_db
@@ -103,10 +104,7 @@ async def get_player(ime: str, conn=Depends(get_db)):
         await cur.execute("SELECT * FROM players WHERE ime = %s", (ime,))
         player = await cur.fetchone()
         if not player:
-            await cur.execute("INSERT INTO players (ime) VALUES (%s)", (ime,))
-            await conn.commit()
-            await cur.execute("SELECT * FROM players WHERE ime = %s", (ime,))
-            player = await cur.fetchone()
+            return JSONResponse({"error": "Player not found"}, status_code=404)
     return _decode_player(player)
 
 
@@ -154,9 +152,7 @@ async def save_player(ime: str, data: PlayerSave, conn=Depends(get_db)):
         kolone = "inventory, equipment, max_hp, max_mana"
         row = await _zakljucaj_igraca(cur, ime, kolone)
         if not row:
-            # novi igrac: gold/inventory/equipment iz DEFAULT vrednosti tabele
-            await cur.execute("INSERT IGNORE INTO players (ime) VALUES (%s)", (ime,))
-            row = await _zakljucaj_igraca(cur, ime, kolone)
+            return await _greska(conn, "Player not found")
 
         db_inv = json.loads(row["inventory"] or "[]")
         db_eq = json.loads(row["equipment"] or "{}")
