@@ -166,15 +166,16 @@ async def login(data: LoginRequest, request: Request, conn=Depends(get_db)):
         token = secrets.token_urlsafe(32)
         istice = _sada_utc() + TRAJANJE_SESIJE
 
-        # Novi login izbacuje stari (samo redovi ovog naloga, preko indeksa). Na prolaznu gresku
-        # rollback i cela transakcija (DELETE + INSERT + commit) ispocetka, najvise MAX_POKUSAJA puta.
+        # Novi login zamenjuje staru sesiju (UNIQUE account_id, migracija 004): jedan upsert,
+        # bez DELETE-a i njegovog gap lock-a. Na prolaznu gresku rollback i cela transakcija
+        # ispocetka, najvise MAX_POKUSAJA puta.
         for pokusaj in range(1, MAX_POKUSAJA + 1):
             try:
-                await cur.execute("DELETE FROM sessions WHERE account_id = %s", (nalog["id"],))
-                await cur.execute(
-                    "INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (%s, %s, %s)",
-                    (_hash_tokena(token), nalog["id"], istice),
-                )
+                await cur.execute("""
+                    INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE token_hash = VALUES(token_hash),
+                        expires_at = VALUES(expires_at), created_at = CURRENT_TIMESTAMP
+                """, (_hash_tokena(token), nalog["id"], istice))
                 await conn.commit()
                 break
             except aiomysql.OperationalError as e:
