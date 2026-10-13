@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import secrets
 import time
@@ -17,6 +18,7 @@ from db import get_db
 from models import LoginRequest, RegisterRequest, VerifyRequest
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 ph = PasswordHasher()
 
 IME_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
@@ -28,6 +30,8 @@ LOGIN_LIMIT, LOGIN_PROZOR = 5, 300      # 5 neuspelih / 5 min po (ime, ip)
 REG_LIMIT, REG_PROZOR = 5, 3600         # 5 registracija / sat po ip
 _neuspeli_login: dict = defaultdict(deque)
 _registracije: dict = defaultdict(deque)
+# MariaDB: 1020 = red promenjen posle snapshot-a (innodb_snapshot_isolation), 1213 = deadlock
+PROLAZNE_GRESKE = (1020, 1213)
 
 # Za nepostojece naloge i dalje radimo verify, da vreme odgovora ne otkrije
 # da li ime postoji.
@@ -154,19 +158,37 @@ async def login(data: LoginRequest, request: Request, conn=Depends(get_db)):
                 "UPDATE accounts SET password_hash = %s WHERE id = %s", (novi, nalog["id"])
             )
 
+        # Kraj transakcije odmah posle provere lozinke: sesija se upisuje u novoj, bez snapshot-a
+        # uzetog pre (spore) provere, inace MariaDB baci 1020 kad se dve prijave preklope.
+        await conn.commit()
+
         token = secrets.token_urlsafe(32)
         istice = _sada_utc() + TRAJANJE_SESIJE
 
-        # Novi login izbacuje stari; usput brisemo istekle sesije svih naloga.
-        await cur.execute(
-            "DELETE FROM sessions WHERE account_id = %s OR expires_at < UTC_TIMESTAMP()",
-            (nalog["id"],),
-        )
-        await cur.execute(
-            "INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (%s, %s, %s)",
-            (_hash_tokena(token), nalog["id"], istice),
-        )
+        # Novi login izbacuje stari (samo redovi ovog naloga, preko indeksa); jedan retry na prolaznu gresku.
+        for pokusaj in (1, 2):
+            try:
+                await cur.execute("DELETE FROM sessions WHERE account_id = %s", (nalog["id"],))
+                await cur.execute(
+                    "INSERT INTO sessions (token_hash, account_id, expires_at) VALUES (%s, %s, %s)",
+                    (_hash_tokena(token), nalog["id"], istice),
+                )
+                await conn.commit()
+                break
+            except aiomysql.OperationalError as e:
+                await conn.rollback()
+                if pokusaj == 2 or e.args[0] not in PROLAZNE_GRESKE:
+                    raise
+                log.warning("login: sesija, greska %s, ponavljam", e.args[0])
+
+    # Istekle sesije svih naloga: posebna transakcija, greska ne rusi prijavu (sledeci login pokusava opet).
+    try:
+        async with conn.cursor() as cur:
+            await cur.execute("DELETE FROM sessions WHERE expires_at < UTC_TIMESTAMP()")
         await conn.commit()
+    except aiomysql.Error as e:
+        await conn.rollback()
+        log.warning("login: ciscenje isteklih sesija preskoceno (%s)", e.args[0] if e.args else e)
 
     return {
         "status": "ok",
