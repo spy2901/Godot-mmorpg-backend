@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 
 from auth import require_server_key
 from db import get_db
-from models import (GoldChange, InventoryChange, PlayerSave, QuestAccept,
-                    QuestKill, QuestTurnin, ShopBuy, XpChange)
+from models import (GoldChange, InventoryChange, ItemUse, PlayerSave,
+                    QuestAccept, QuestKill, QuestTurnin, ShopBuy, XpChange)
 from routers.inventory_utils import (MAX_SLOTOVA, dodaj_u_inventar,
                                      ukloni_iz_inventara)
 
@@ -294,6 +294,44 @@ async def kupi(ime: str, data: ShopBuy, conn=Depends(get_db)):
         await conn.commit()
 
     return {"status": "ok", "gold": novo, "inventory": inv}
+
+
+@router.post("/{ime}/item/use")
+async def upotrebi_item(ime: str, data: ItemUse, conn=Depends(get_db)):
+    # Backend ne zna trenutni hp/manu (drzi ih game server): samo trosi komad i vraca efekat.
+    async with conn.cursor(aiomysql.DictCursor) as cur:
+        row = await _zakljucaj_igraca(cur, ime, "inventory")
+        if not row:
+            return await _greska(conn, "Player not found")
+
+        await cur.execute(
+            "SELECT id, tip, hp_efekat, mana_efekat, cooldown_ms FROM items WHERE id = %s",
+            (data.item_id,),
+        )
+        item = await cur.fetchone()
+        if not item:
+            return await _greska(conn, "Item not found")
+        if item["tip"] != "consumable" or item["hp_efekat"] + item["mana_efekat"] <= 0:
+            return await _greska(conn, "Item nije potrosni")
+
+        # samo inventory; opremljeno se ne racuna
+        inv = json.loads(row["inventory"] or "[]")
+        if not ukloni_iz_inventara(inv, data.item_id, 1):
+            return await _greska(conn, "Nedovoljno itema")
+
+        await cur.execute(
+            "UPDATE players SET inventory = %s WHERE ime = %s", (json.dumps(inv), ime)
+        )
+        await conn.commit()
+
+    return {
+        "status": "ok",
+        "item_id": item["id"],
+        "hp_efekat": item["hp_efekat"],
+        "mana_efekat": item["mana_efekat"],
+        "cooldown_ms": item["cooldown_ms"],
+        "inventory": inv,
+    }
 
 
 @router.post("/{ime}/quest/accept")

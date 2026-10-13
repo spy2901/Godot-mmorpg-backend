@@ -28,6 +28,9 @@ class ShopBuy(BaseModel):
     item_id: str
     kolicina: int = 1
 
+class ItemUse(BaseModel):
+    item_id: str
+
 class QuestAccept(BaseModel):
     quest_id: str
 
