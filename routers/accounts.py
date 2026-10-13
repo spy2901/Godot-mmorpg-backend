@@ -32,6 +32,7 @@ _neuspeli_login: dict = defaultdict(deque)
 _registracije: dict = defaultdict(deque)
 # MariaDB: 1020 = red promenjen posle snapshot-a (innodb_snapshot_isolation), 1213 = deadlock
 PROLAZNE_GRESKE = (1020, 1213)
+MAX_POKUSAJA = 3
 
 # Za nepostojece naloge i dalje radimo verify, da vreme odgovora ne otkrije
 # da li ime postoji.
@@ -165,8 +166,9 @@ async def login(data: LoginRequest, request: Request, conn=Depends(get_db)):
         token = secrets.token_urlsafe(32)
         istice = _sada_utc() + TRAJANJE_SESIJE
 
-        # Novi login izbacuje stari (samo redovi ovog naloga, preko indeksa); jedan retry na prolaznu gresku.
-        for pokusaj in (1, 2):
+        # Novi login izbacuje stari (samo redovi ovog naloga, preko indeksa). Na prolaznu gresku
+        # rollback i cela transakcija (DELETE + INSERT + commit) ispocetka, najvise MAX_POKUSAJA puta.
+        for pokusaj in range(1, MAX_POKUSAJA + 1):
             try:
                 await cur.execute("DELETE FROM sessions WHERE account_id = %s", (nalog["id"],))
                 await cur.execute(
@@ -177,9 +179,9 @@ async def login(data: LoginRequest, request: Request, conn=Depends(get_db)):
                 break
             except aiomysql.OperationalError as e:
                 await conn.rollback()
-                if pokusaj == 2 or e.args[0] not in PROLAZNE_GRESKE:
+                if pokusaj == MAX_POKUSAJA or e.args[0] not in PROLAZNE_GRESKE:
                     raise
-                log.warning("login: sesija, greska %s, ponavljam", e.args[0])
+                log.warning("login: sesija, greska %s, pokusaj %d/%d, ponavljam", e.args[0], pokusaj, MAX_POKUSAJA)
 
     # Istekle sesije svih naloga: posebna transakcija, greska ne rusi prijavu (sledeci login pokusava opet).
     try:
