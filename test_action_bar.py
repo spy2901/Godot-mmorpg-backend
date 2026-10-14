@@ -74,6 +74,25 @@ def test_nepostojeci_item_odbijen():
     assert _u_bazi() == RASPORED
 
 
+def test_save_i_inventar_ne_diraju_raspored():
+    # game server pri odjavi i reset_stanje.py (test-pi): /save bez polja action_bar, inventory/change pre toga
+    _postavi()
+    _sacuvaj(RASPORED)
+    telo = {"hp": 60, "mana": 100, "pos_x": 1.0, "pos_y": 1.16, "pos_z": 2.0, "inventory": [], "equipment": {}}
+    assert client.post(f"/players/{TEST_IME}/save", json=telo, headers=KLJUC).json() == {"status": "ok"}
+    assert _u_bazi() == RASPORED
+    r = client.post(f"/players/{TEST_IME}/inventory/change",
+                    json={"item_id": "small_health_potion", "delta": 3}, headers=KLJUC).json()
+    assert r["status"] == "ok"
+    telo["inventory"] = r["inventory"]
+    assert client.post(f"/players/{TEST_IME}/save", json=telo, headers=KLJUC).json() == {"status": "ok"}
+    assert _u_bazi() == RASPORED
+    # i kad save posalje polje action_bar, ignorise se (raspored menja samo /action_bar)
+    telo["action_bar"] = None
+    assert client.post(f"/players/{TEST_IME}/save", json=telo, headers=KLJUC).json() == {"status": "ok"}
+    assert _u_bazi() == RASPORED
+
+
 def test_nepostojeci_igrac_i_bez_kljuca():
     assert _sacuvaj(RASPORED, ime="__nema_igraca").json() == {"error": "Player not found"}
     _postavi()
