@@ -31,6 +31,9 @@ class ShopBuy(BaseModel):
 class ItemUse(BaseModel):
     item_id: str
 
+class ActionBar(BaseModel):
+    slotovi: list[str | None]  # 10 slotova, null = prazan
+
 class QuestAccept(BaseModel):
     quest_id: str
 

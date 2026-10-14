@@ -8,8 +8,9 @@ from fastapi.responses import JSONResponse
 
 from auth import require_server_key
 from db import get_db
-from models import (GoldChange, InventoryChange, ItemUse, PlayerSave,
-                    QuestAccept, QuestKill, QuestTurnin, ShopBuy, XpChange)
+from models import (ActionBar, GoldChange, InventoryChange, ItemUse,
+                    PlayerSave, QuestAccept, QuestKill, QuestTurnin, ShopBuy,
+                    XpChange)
 from routers.inventory_utils import (MAX_SLOTOVA, dodaj_u_inventar,
                                      ukloni_iz_inventara)
 
@@ -26,6 +27,8 @@ SLOTOVI_OPREME = {"head", "chest", "legs", "boots", "weapon", "shield"}
 def _decode_player(row: dict) -> dict:
     row["inventory"] = json.loads(row.get("inventory") or "[]")
     row["equipment"] = json.loads(row.get("equipment") or "{}")
+    # null = lik jos nema sacuvan raspored (game server ga popuni iz inventara)
+    row["action_bar"] = json.loads(row["action_bar"]) if row.get("action_bar") else None
     return row
 
 
@@ -332,6 +335,35 @@ async def upotrebi_item(ime: str, data: ItemUse, conn=Depends(get_db)):
         "cooldown_ms": item["cooldown_ms"],
         "inventory": inv,
     }
+
+
+BROJ_SLOTOVA_BARA = 10
+
+
+@router.post("/{ime}/action_bar")
+async def sacuvaj_action_bar(ime: str, data: ActionBar, conn=Depends(get_db)):
+    # Raspored drzi game server (on proverava zahteve klijenta); ovde samo oblik i da predmeti postoje.
+    if len(data.slotovi) != BROJ_SLOTOVA_BARA:
+        return {"error": f"action bar mora imati {BROJ_SLOTOVA_BARA} slotova"}
+
+    async with conn.cursor(aiomysql.DictCursor) as cur:
+        if not await _zakljucaj_igraca(cur, ime, "ime"):
+            return await _greska(conn, "Player not found")
+
+        ids = {i for i in data.slotovi if i is not None}
+        if ids:
+            await cur.execute(
+                f"SELECT id FROM items WHERE id IN ({', '.join(['%s'] * len(ids))})", tuple(ids)
+            )
+            if len(await cur.fetchall()) != len(ids):
+                return await _greska(conn, "Item not found")
+
+        await cur.execute(
+            "UPDATE players SET action_bar = %s WHERE ime = %s", (json.dumps(data.slotovi), ime)
+        )
+        await conn.commit()
+
+    return {"status": "ok", "action_bar": data.slotovi}
 
 
 @router.post("/{ime}/quest/accept")
