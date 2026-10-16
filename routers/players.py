@@ -85,23 +85,31 @@ async def _upisi_xp(cur, ime: str, s: dict):
     await cur.execute(f"UPDATE players SET {postavi} WHERE ime = %s", (*vrednosti, ime))
 
 
-async def _validna_oprema(cur, eq: dict) -> bool:
+async def _predmeti_opreme(cur, eq: dict) -> dict:
     ids = {v for v in eq.values() if not _prazno(v)}
     if not ids:
-        return True
+        return {}
     await cur.execute(
-        f"SELECT id, tip FROM items WHERE id IN ({', '.join(['%s'] * len(ids))})",
+        f"SELECT id, slot, hp_bonus FROM items WHERE id IN ({', '.join(['%s'] * len(ids))})",
         tuple(ids),
     )
-    tipovi = {r["id"]: r["tip"] for r in await cur.fetchall()}
+    return {r["id"]: r for r in await cur.fetchall()}
+
+
+async def _validna_oprema(cur, eq: dict) -> bool:
+    # svaki opremljen predmet postoji i ide bas u taj slot (items.slot; NULL = ne oprema se)
+    predmeti = await _predmeti_opreme(cur, eq)
     for slot, item_id in eq.items():
         if _prazno(item_id):
             continue
-        if item_id not in tipovi:
-            return False
-        if tipovi[item_id] != ("weapon" if slot == "weapon" else "armor"):
+        if item_id not in predmeti or predmeti[item_id]["slot"] != slot:
             return False
     return True
+
+
+async def _hp_bonus_opreme(cur, eq: dict) -> int:
+    predmeti = await _predmeti_opreme(cur, eq)
+    return sum(int(predmeti[i]["hp_bonus"] or 0) for i in eq.values() if not _prazno(i) and i in predmeti)
 
 
 @router.get("/{ime}")
@@ -169,7 +177,9 @@ async def save_player(ime: str, data: PlayerSave, conn=Depends(get_db)):
             log.warning("save %r: neispravan inventory/equipment, zadrzano stanje iz baze", ime)
             inventory, equipment = row["inventory"], row["equipment"]
 
-        hp = min(max(data.hp, 1), int(row["max_hp"]))
+        # max_hp u bazi je osnovni (raste sa nivoom); oprema koja se upisuje dodaje svoj hp_bonus
+        hp_max = int(row["max_hp"]) + await _hp_bonus_opreme(cur, json.loads(equipment or "{}"))
+        hp = min(max(data.hp, 1), hp_max)
         mana = min(max(data.mana, 0), int(row["max_mana"]))
 
         await cur.execute("""
