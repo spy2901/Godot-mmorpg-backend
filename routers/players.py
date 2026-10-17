@@ -11,6 +11,7 @@ from db import get_db
 from models import (ActionBar, GoldChange, InventoryChange, ItemUse,
                     PlayerSave, QuestAccept, QuestKill, QuestTurnin, ShopBuy,
                     XpChange)
+from napredak import primeni_xp
 from routers.inventory_utils import (MAX_SLOTOVA, dodaj_u_inventar,
                                      ukloni_iz_inventara)
 
@@ -58,29 +59,14 @@ async def _je_zavrsen(cur, ime: str, quest_id: str) -> bool:
 XP_KOLONE = "level, xp, max_xp, max_hp, max_mana, napad_damage"
 
 
-def _primeni_xp(row: dict, delta: int) -> dict:
-    s = {k: int(row[k] or 0) for k in XP_KOLONE.split(", ")}
-    s["max_xp"] = max(s["max_xp"], 1)  # max_xp 0 bi dao beskonacnu petlju
-    s["xp"] += max(delta, 0)
-    s["level_up"] = False
-    while s["xp"] >= s["max_xp"]:
-        s["xp"] -= s["max_xp"]
-        s["level"] += 1
-        # celobrojno, jer npr. int(100 * 1.15) == 114 zbog float greske
-        s["max_xp"] = s["max_xp"] * 3 // 2
-        s["max_hp"] = s["max_hp"] * 115 // 100
-        s["max_mana"] = s["max_mana"] * 11 // 10
-        s["napad_damage"] = s["napad_damage"] * 11 // 10
-        s["level_up"] = True
-    return s
-
-
 async def _upisi_xp(cur, ime: str, s: dict):
     kolone = XP_KOLONE.split(", ")
     vrednosti = [s[k] for k in kolone]
-    if s["level_up"]:  # level up puni hp i manu na NOVE maksimume
+    if s["level_up"]:  # level up puni hp (osnovni maksimum + hp_bonus opreme) i manu na NOVE maksimume
+        await cur.execute("SELECT equipment FROM players WHERE ime = %s", (ime,))
+        eq = json.loads((await cur.fetchone())["equipment"] or "{}")
         kolone += ["hp", "mana"]
-        vrednosti += [s["max_hp"], s["max_mana"]]
+        vrednosti += [s["max_hp"] + await _hp_bonus_opreme(cur, eq), s["max_mana"]]
     postavi = ", ".join(f"{k} = %s" for k in kolone)
     await cur.execute(f"UPDATE players SET {postavi} WHERE ime = %s", (*vrednosti, ime))
 
@@ -263,7 +249,7 @@ async def promeni_xp(ime: str, data: XpChange, conn=Depends(get_db)):
         if not row:
             return await _greska(conn, "Player not found")
 
-        s = _primeni_xp(row, data.delta)
+        s = primeni_xp(row, data.delta)
         await _upisi_xp(cur, ime, s)
         await conn.commit()
 
@@ -511,7 +497,7 @@ async def predaj_quest(ime: str, data: QuestTurnin, conn=Depends(get_db)):
         """, (gold, json.dumps(inv), ime))
 
         nagrada_xp = max(int(quest["nagrada_xp"] or 0), 0)
-        s = _primeni_xp(row, nagrada_xp)
+        s = primeni_xp(row, nagrada_xp)
         await _upisi_xp(cur, ime, s)
         await conn.commit()
 
