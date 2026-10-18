@@ -1,5 +1,6 @@
 """Test migracije 009 (sadržaj zone 2) i njenog rollback-a na posebnoj bazi mmorpg_test_009.
 Struktura i podaci tabela items i quests se kopiraju iz baze DB_NAME (podaci te baze se ne diraju), players samo struktura.
+Za stvarni collation (items utf8mb3, quests utf8mb4_unicode_ci) DB_NAME treba da bude kopija šeme sa Pi-ja (mariadb-dump --no-data).
 Traži mariadb CLI (DELIMITER blokovi) i pravo CREATE DATABASE.
 Pokretanje: DB_HOST=127.0.0.1 DB_PORT=33077 DB_USER=root DB_PASSWORD=... python3.12 test_migracija_009.py"""
 import os
@@ -149,7 +150,39 @@ def test_rollback_ne_vraca_izmenjeno_posle_migracije():
         _sql(f"DROP DATABASE IF EXISTS {TEST_DB}", db=None)
 
 
+def test_neocekivano_stanje_prekida_bez_izmena():
+    # stara vrednost nije očekivana (npr. neko je već podesio efekat): migracija odbija i ništa ne menja
+    for upit in ("UPDATE items SET mana_efekat = 5 WHERE id = 'stamina_potion'",
+                 "UPDATE quests SET sledeci_quest = 'goblin_killer' WHERE id = 'q2'"):
+        _napravi_bazu()
+        try:
+            _sql(upit)
+            pre = _snimak()
+            r = _pokreni(MIGRACIJA)
+            assert r.returncode != 0 and b"nisu u ocekivanom stanju" in r.stderr, r.stderr.decode()
+            assert _snimak() == pre
+        finally:
+            _sql(f"DROP DATABASE IF EXISTS {TEST_DB}", db=None)
+
+
+def test_ostatak_neuspelog_pokusaja_ne_blokira():
+    # prazne rezervne tabele (pokušaj pao pre COMMIT-a): migracija ih briše i prolazi
+    _napravi_bazu()
+    try:
+        _sql("CREATE TABLE items_pre_009 (id VARCHAR(50))")
+        _sql("CREATE TABLE quests_pre_009 (id VARCHAR(50))")
+        pre_items = _sql("SELECT * FROM items")
+        r = _pokreni(MIGRACIJA)
+        assert r.returncode == 0, r.stderr.decode()
+        _proveri_posle_migracije(pre_items)
+        assert _sql("SELECT COUNT(*) FROM items_pre_009") == ((2,),)
+    finally:
+        _sql(f"DROP DATABASE IF EXISTS {TEST_DB}", db=None)
+
+
 if __name__ == "__main__":
     test_migracija_i_rollback()
     test_rollback_ne_vraca_izmenjeno_posle_migracije()
+    test_neocekivano_stanje_prekida_bez_izmena()
+    test_ostatak_neuspelog_pokusaja_ne_blokira()
     print("ok")

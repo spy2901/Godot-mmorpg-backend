@@ -15,3 +15,16 @@ SELECT id, ime FROM items WHERE id IN ('wolf_pelt', 'spider_web', 'poison_gland'
 -- 3) stanje pre: broj predmeta i questova, likovi sa aktivnim questom
 SELECT (SELECT COUNT(*) FROM items) AS predmeta, (SELECT COUNT(*) FROM quests) AS questova,
        (SELECT COUNT(*) FROM players WHERE aktivni_quest_id IS NOT NULL) AS aktivnih_questova;
+-- 4) očekivano stanje kao provera u 009 (1 = migracija prolazi, 0 = prekid): stamina/antidote bez efekta i cd 1000,
+--    kosti_za_supu i q2 bez sledećeg questa, nijedan nov id
+SELECT (SELECT COUNT(*) FROM items WHERE id IN ('stamina_potion', 'antidote') AND hp_efekat = 0 AND mana_efekat = 0
+          AND cooldown_ms = 1000) = 2
+   AND (SELECT COUNT(*) FROM quests WHERE id IN ('kosti_za_supu', 'q2') AND sledeci_quest IS NULL) = 2 AS ocekivano_stanje;
+-- 5) kosti_za_supu i q2 po liku: završen, aktivan (sa progresom) ili ništa (dobijaju sledeći quest u lancu posle 009)
+SELECT p.ime AS lik, q.id AS quest,
+       CASE WHEN z.quest_id IS NOT NULL THEN 'zavrsen'
+            WHEN p.aktivni_quest_id = q.id THEN CONCAT('aktivan ', p.quest_progres, '/', q.kolicina)
+            ELSE '-' END AS stanje
+FROM players p CROSS JOIN quests q
+LEFT JOIN zavrseni_questovi z ON z.player_ime = p.ime AND z.quest_id = q.id
+WHERE q.id IN ('kosti_za_supu', 'q2') ORDER BY p.ime, q.id;
