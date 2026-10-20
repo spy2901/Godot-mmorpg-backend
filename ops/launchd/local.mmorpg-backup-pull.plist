@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Mac: cp u ~/Library/LaunchAgents/ pa launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.mmorpg-backup-pull.plist
+     Svaki dan u 09:00 po lokalnom vremenu (posle backup-a u 04:15 UTC); propušteno pokretanje launchd uradi posle buđenja. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.mmorpg-backup-pull</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nemanjab/mmorpg-server/ops/pull_backup_mac.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+</dict>
+</plist>
