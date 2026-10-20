@@ -297,20 +297,19 @@ async def kupi(ime: str, data: ShopBuy, conn=Depends(get_db)):
 
 @router.post("/{ime}/item/use")
 async def upotrebi_item(ime: str, data: ItemUse, conn=Depends(get_db)):
-    # Backend ne zna trenutni hp/manu (drzi ih game server): samo trosi komad i vraca efekat.
+    # Backend ne zna trenutni hp/manu ni buffove (drzi ih game server): samo trosi komad i vraca efekat.
+    # Buff predmet (migracija 010: buff_tip) je potrosni i bez hp/mana efekta. SELECT *: radi i pre migracije 010.
     async with conn.cursor(aiomysql.DictCursor) as cur:
         row = await _zakljucaj_igraca(cur, ime, "inventory")
         if not row:
             return await _greska(conn, "Player not found")
 
-        await cur.execute(
-            "SELECT id, tip, hp_efekat, mana_efekat, cooldown_ms FROM items WHERE id = %s",
-            (data.item_id,),
-        )
+        await cur.execute("SELECT * FROM items WHERE id = %s", (data.item_id,))
         item = await cur.fetchone()
         if not item:
             return await _greska(conn, "Item not found")
-        if item["tip"] != "consumable" or item["hp_efekat"] + item["mana_efekat"] <= 0:
+        buff_tip = item.get("buff_tip")
+        if item["tip"] != "consumable" or (item["hp_efekat"] + item["mana_efekat"] <= 0 and not buff_tip):
             return await _greska(conn, "Item nije potrosni")
 
         # samo inventory; opremljeno se ne racuna
@@ -329,6 +328,9 @@ async def upotrebi_item(ime: str, data: ItemUse, conn=Depends(get_db)):
         "hp_efekat": item["hp_efekat"],
         "mana_efekat": item["mana_efekat"],
         "cooldown_ms": item["cooldown_ms"],
+        "buff_tip": buff_tip,
+        "buff_vrednost": item.get("buff_vrednost", 0),
+        "buff_trajanje_ms": item.get("buff_trajanje_ms", 0),
         "inventory": inv,
     }
 

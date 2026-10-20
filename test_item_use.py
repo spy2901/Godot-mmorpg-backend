@@ -70,6 +70,39 @@ def test_nepotrosni_predmet():
     assert _inv() == [{"id": "antidote", "kolicina": 1, "slot": 0}]
 
 
+def test_buff_predmet_bez_010_odbijen():
+    # baza pre migracije 010 (nema buff_* kolona): eliksir je i dalje "nije potrosni", ostalo radi kao ranije
+    if _sql("SHOW COLUMNS FROM items LIKE 'buff_tip'"):
+        return
+    _postavi([{"id": "elixir_of_strength", "kolicina": 1, "slot": 0}])
+    assert _use("elixir_of_strength").json() == {"error": "Item nije potrosni"}
+
+
+def test_buff_predmet_posle_010():
+    # posebna baza sa primenjenom 010 (DB_NAME ostaje u stanju koje traže testovi migracija 008/009)
+    import test_migracija_010 as m010
+    m010._napravi_bazu()
+    stara = DB_CONFIG["db"]
+    try:
+        assert m010._pokreni(m010.MIGRACIJA).returncode == 0
+        DB_CONFIG["db"] = m010.TEST_DB
+        for id, (tip, vrednost, trajanje) in m010.BUFFOVI.items():
+            _postavi([{"id": id, "kolicina": 2, "slot": 3}])
+            r = _use(id).json()
+            assert r["status"] == "ok" and r["item_id"] == id, r
+            assert (r["buff_tip"], r["buff_vrednost"], r["buff_trajanje_ms"]) == (tip, vrednost, trajanje)
+            assert (r["hp_efekat"], r["mana_efekat"], r["cooldown_ms"]) == (0, 0, 5000)
+            assert r["inventory"] == [{"id": id, "kolicina": 1, "slot": 3}] and _inv() == r["inventory"]
+        # predmet bez buff-a i bez efekta i dalje nije potrošan; napitak vraća prazan buff
+        _postavi([{"id": "iron_ore", "kolicina": 1, "slot": 0}, {"id": "small_health_potion", "kolicina": 1, "slot": 1}])
+        assert _use("iron_ore").json() == {"error": "Item nije potrosni"}
+        r = _use("small_health_potion").json()
+        assert r["hp_efekat"] == 30 and (r["buff_tip"], r["buff_vrednost"], r["buff_trajanje_ms"]) == (None, 0, 0)
+    finally:
+        DB_CONFIG["db"] = stara
+        m010._sql(f"DROP DATABASE IF EXISTS {m010.TEST_DB}", db=None)
+
+
 def test_predmet_koji_igrac_nema():
     _postavi([{"id": "iron_ore", "kolicina": 5, "slot": 0}])
     assert _use("large_health_potion").json() == {"error": "Nedovoljno itema"}
