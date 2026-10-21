@@ -103,6 +103,25 @@ def test_buff_predmet_posle_010():
         m010._sql(f"DROP DATABASE IF EXISTS {m010.TEST_DB}", db=None)
 
 
+def test_efekti_posle_011():
+    # posebna baza sa primenjenom 011: backend samo prosleđuje nove buff_tip (efekte primenjuje game server)
+    import test_migracija_011 as m011
+    m011._napravi_bazu()
+    stara = DB_CONFIG["db"]
+    try:
+        assert m011._pokreni(m011.MIGRACIJA).returncode == 0
+        DB_CONFIG["db"] = m011.TEST_DB
+        for id, (_q, cd, hp, tip, vrednost, trajanje) in m011.EFEKTI.items():
+            _postavi([{"id": id, "kolicina": 2, "slot": 0}])
+            r = _use(id).json()
+            assert r["status"] == "ok" and (r["hp_efekat"], r["cooldown_ms"]) == (hp, cd), r
+            assert (r["buff_tip"], r["buff_vrednost"], r["buff_trajanje_ms"]) == (tip, vrednost, trajanje), r
+            assert r["inventory"] == [{"id": id, "kolicina": 1, "slot": 0}] and _inv() == r["inventory"]
+    finally:
+        DB_CONFIG["db"] = stara
+        m011._sql(f"DROP DATABASE IF EXISTS {m011.TEST_DB}", db=None)
+
+
 def test_predmet_koji_igrac_nema():
     _postavi([{"id": "iron_ore", "kolicina": 5, "slot": 0}])
     assert _use("large_health_potion").json() == {"error": "Nedovoljno itema"}
